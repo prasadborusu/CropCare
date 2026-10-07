@@ -17,6 +17,7 @@ import {
 import { StorageService, subscribeToStorage } from '../services/storageService';
 import { isSupabaseConfigured } from '../services/supabase';
 import { reverseGeocodeLocation } from '../services/weatherService';
+import { LocationService } from '../services/locationService';
 import { useLanguage } from '../i18n/LanguageContext';
 import { Field } from '../types';
 
@@ -54,28 +55,31 @@ export const Header: React.FC<HeaderProps> = ({
     return unsub;
   }, []);
 
-  const detectLiveLocation = () => {
-    if (!navigator.geolocation) return;
+  const detectLiveLocation = async (isManual = false) => {
     setIsLocating(true);
-    navigator.geolocation.getCurrentPosition(
-      async (pos) => {
-        setIsLocating(false);
+    try {
+      const loc = await LocationService.getCurrentLocation({
+        enableHighAccuracy: isManual,
+        timeoutMs: isManual ? 5000 : 3000,
+        fallbackToNetwork: true,
+      });
+      setIsLocating(false);
+
+      let placeStr = loc.placeName;
+      if (!placeStr || placeStr === 'Farm Location') {
         try {
-          const resolvedPlace = await reverseGeocodeLocation(pos.coords.latitude, pos.coords.longitude);
-          StorageService.setLocation(resolvedPlace);
-          setLocation(resolvedPlace);
-          setIsLiveGPS(true);
+          placeStr = await reverseGeocodeLocation(loc.lat, loc.lng);
         } catch {
-          const locStr = `Lat ${pos.coords.latitude.toFixed(2)}, Lon ${pos.coords.longitude.toFixed(2)}`;
-          StorageService.setLocation(locStr);
-          setLocation(locStr);
+          placeStr = `Lat ${loc.lat.toFixed(2)}, Lon ${loc.lng.toFixed(2)}`;
         }
-      },
-      () => {
-        setIsLocating(false);
-      },
-      { enableHighAccuracy: true, timeout: 8000 }
-    );
+      }
+
+      StorageService.setLocation(placeStr);
+      setLocation(placeStr);
+      setIsLiveGPS(loc.source === 'gps');
+    } catch {
+      setIsLocating(false);
+    }
   };
 
   const handleSaveLocation = (e: React.FormEvent) => {
@@ -88,7 +92,7 @@ export const Header: React.FC<HeaderProps> = ({
   };
 
   const handleDetectGPS = () => {
-    detectLiveLocation();
+    detectLiveLocation(true);
   };
 
   // Compute real alerts from actual user fields

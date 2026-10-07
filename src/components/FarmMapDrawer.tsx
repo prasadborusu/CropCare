@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { calculatePolygonArea, LatLngPoint, FarmAreaCalculation } from '../utils/geoAreaCalculator';
 import { searchGeocodingLocations, GeocodingResult } from '../services/weatherService';
+import { LocationService } from '../services/locationService';
 
 interface FarmMapDrawerProps {
   initialCenter?: { lat: number; lng: number };
@@ -253,80 +254,79 @@ export const FarmMapDrawer: React.FC<FarmMapDrawerProps> = ({
   };
 
   // Live Location Detection Function
-  const triggerLiveLocation = (mapInstance?: L.Map) => {
+  const triggerLiveLocation = async (mapInstance?: L.Map, isManual = false) => {
     const map = mapInstance || mapInstanceRef.current;
-    if (!navigator.geolocation) {
-      setGpsError('Geolocation is not supported by your browser.');
-      return;
-    }
-
     setIsLocatingGPS(true);
     setGpsError(null);
 
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setIsLocatingGPS(false);
-        const { latitude, longitude, accuracy } = pos.coords;
-        setUserGpsPos({ lat: latitude, lng: longitude });
+    try {
+      const loc = await LocationService.getCurrentLocation({
+        enableHighAccuracy: isManual,
+        timeoutMs: isManual ? 5000 : 3000,
+        fallbackToNetwork: true,
+      });
 
-        if (map) {
-          map.flyTo([latitude, longitude], 17, { duration: 1.5 });
+      setIsLocatingGPS(false);
+      setUserGpsPos({ lat: loc.lat, lng: loc.lng });
 
-          // Show pulsing user location pin
-          if (userLocationMarkerRef.current) {
-            map.removeLayer(userLocationMarkerRef.current);
-          }
+      if (loc.permissionStatus === 'denied') {
+        setGpsError('Browser location permission is blocked. Loaded approximate farm area via network. Click 🔒 in address bar to allow high-accuracy GPS.');
+      }
 
-          const userIcon = L.divIcon({
-            className: 'live-user-marker',
-            html: `
-              <div style="position: relative; width: 20px; height: 20px;">
-                <div style="
-                  position: absolute;
-                  width: 20px;
-                  height: 20px;
-                  border-radius: 50%;
-                  background: #3b82f6;
-                  border: 3px solid #ffffff;
-                  box-shadow: 0 0 10px rgba(59,130,246,0.8);
-                "></div>
-                <div style="
-                  position: absolute;
-                  top: -6px;
-                  left: -6px;
-                  width: 32px;
-                  height: 32px;
-                  border-radius: 50%;
-                  background: rgba(59,130,246,0.25);
-                  animation: ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;
-                "></div>
-              </div>
-            `,
-            iconSize: [20, 20],
-            iconAnchor: [10, 10],
-          });
+      if (map) {
+        map.flyTo([loc.lat, loc.lng], loc.source === 'gps' ? 17 : 14, { duration: 1.2 });
 
-          const uMarker = L.marker([latitude, longitude], {
-            icon: userIcon,
-            title: `Your Live Location (±${Math.round(accuracy)}m)`,
-          }).addTo(map);
-
-          uMarker.bindPopup(`<b>📍 You Are Here</b><br>Accuracy: ±${Math.round(accuracy)}m`);
-          userLocationMarkerRef.current = uMarker;
+        // Show pulsing user location pin
+        if (userLocationMarkerRef.current) {
+          map.removeLayer(userLocationMarkerRef.current);
         }
-      },
-      (err) => {
-        setIsLocatingGPS(false);
-        let errorMsg = 'Please allow GPS location permission in your browser.';
-        if (err.code === err.PERMISSION_DENIED) {
-          errorMsg = 'Location permission denied. Please allow location access or search your village.';
-        } else if (err.code === err.POSITION_UNAVAILABLE) {
-          errorMsg = 'GPS signal unavailable. Please search your village or click on the map.';
-        }
-        setGpsError(errorMsg);
-      },
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
-    );
+
+        const isGps = loc.source === 'gps';
+        const userIcon = L.divIcon({
+          className: 'live-user-marker',
+          html: `
+            <div style="position: relative; width: 22px; height: 22px;">
+              <div style="
+                position: absolute;
+                width: 22px;
+                height: 22px;
+                border-radius: 50%;
+                background: ${isGps ? '#3b82f6' : '#10b981'};
+                border: 3px solid #ffffff;
+                box-shadow: 0 0 12px ${isGps ? 'rgba(59,130,246,0.9)' : 'rgba(16,185,129,0.9)'};
+              "></div>
+              <div style="
+                position: absolute;
+                top: -6px;
+                left: -6px;
+                width: 34px;
+                height: 34px;
+                border-radius: 50%;
+                background: ${isGps ? 'rgba(59,130,246,0.3)' : 'rgba(16,185,129,0.3)'};
+                animation: ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;
+              "></div>
+            </div>
+          `,
+          iconSize: [22, 22],
+          iconAnchor: [11, 11],
+        });
+
+        const label = isGps
+          ? `📍 Live GPS (±${Math.round(loc.accuracy)}m)`
+          : `📍 Farm Area (${loc.placeName || 'Network Detected'})`;
+
+        const uMarker = L.marker([loc.lat, loc.lng], {
+          icon: userIcon,
+          title: label,
+        }).addTo(map);
+
+        uMarker.bindPopup(`<b>${label}</b><br>Lat: ${loc.lat.toFixed(5)}, Lng: ${loc.lng.toFixed(5)}`);
+        userLocationMarkerRef.current = uMarker;
+      }
+    } catch (err) {
+      setIsLocatingGPS(false);
+      setGpsError('Could not auto-detect location. Please search your village or click on the map.');
+    }
   };
 
   // Add Current User Position as a pin
@@ -484,7 +484,7 @@ export const FarmMapDrawer: React.FC<FarmMapDrawerProps> = ({
           {/* GPS Auto-Detect Button */}
           <button
             type="button"
-            onClick={() => triggerLiveLocation()}
+            onClick={() => triggerLiveLocation(undefined, true)}
             disabled={isLocatingGPS}
             className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-sm flex items-center gap-1.5 transition-all hover:scale-105"
           >
@@ -539,7 +539,7 @@ export const FarmMapDrawer: React.FC<FarmMapDrawerProps> = ({
           </div>
           <button 
             type="button" 
-            onClick={() => triggerLiveLocation()}
+            onClick={() => triggerLiveLocation(undefined, true)}
             className="text-xs font-bold underline text-amber-800 hover:text-amber-950"
           >
             Try Again

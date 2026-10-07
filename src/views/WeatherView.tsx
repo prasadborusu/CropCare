@@ -25,6 +25,7 @@ import {
   GeocodingResult 
 } from '../services/weatherService';
 import { StorageService } from '../services/storageService';
+import { LocationService } from '../services/locationService';
 
 export const WeatherView: React.FC = () => {
   const initialLoc = StorageService.getLocation();
@@ -49,20 +50,15 @@ export const WeatherView: React.FC = () => {
   };
 
   useEffect(() => {
-    // Check if navigator geolocation is available to center weather on real user coordinates
-    if (navigator.geolocation && initialLoc === 'Live Farm Location') {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          setCurrentCoords({
-            lat: pos.coords.latitude,
-            lon: pos.coords.longitude,
-            name: StorageService.getLocation() || 'My Farm Location',
-          });
-        },
-        () => {
-          loadWeather();
-        }
-      );
+    // Initial weather load using fast LocationService if needed
+    if (initialLoc === 'Live Farm Location' && currentCoords.lat === 16.96 && currentCoords.lon === 81.12) {
+      LocationService.getCurrentLocation({ timeoutMs: 3000, fallbackToNetwork: true }).then((loc) => {
+        setCurrentCoords({
+          lat: loc.lat,
+          lon: loc.lng,
+          name: loc.placeName || StorageService.getLocation() || 'My Farm Location',
+        });
+      });
     } else {
       loadWeather();
     }
@@ -89,22 +85,20 @@ export const WeatherView: React.FC = () => {
     setSearchQuery('');
   };
 
-  const handleGPSDetect = () => {
-    if (navigator.geolocation) {
-      setLoading(true);
-      navigator.geolocation.getCurrentPosition(
-        async (pos) => {
-          const lat = pos.coords.latitude;
-          const lon = pos.coords.longitude;
-          const locName = `GPS (${lat.toFixed(2)}°N, ${lon.toFixed(2)}°E)`;
-          setCurrentCoords({ lat, lon, name: locName });
-          StorageService.setLocation(locName);
-        },
-        () => {
-          alert('Could not retrieve GPS coordinates. You can search by town or district name.');
-          setLoading(false);
-        }
-      );
+  const handleGPSDetect = async () => {
+    setLoading(true);
+    try {
+      const loc = await LocationService.getCurrentLocation({
+        enableHighAccuracy: true,
+        timeoutMs: 5000,
+        fallbackToNetwork: true,
+      });
+      const locName = loc.placeName || `GPS (${loc.lat.toFixed(2)}°N, ${loc.lng.toFixed(2)}°E)`;
+      setCurrentCoords({ lat: loc.lat, lon: loc.lng, name: locName });
+      StorageService.setLocation(locName);
+    } catch {
+      alert('Could not retrieve GPS coordinates. You can search by town or district name.');
+      setLoading(false);
     }
   };
 
